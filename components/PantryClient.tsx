@@ -1,5 +1,7 @@
 "use client";
 
+import Image from "next/image";
+import Link from "next/link";
 import { useState } from "react";
 import type { Item } from "@/types";
 import { RiskBadge } from "@/components/RiskBadge";
@@ -99,23 +101,43 @@ export function PantryClient({ initialItems }: PantryClientProps) {
                   </div>
                   <div className="mt-3 space-y-3">
                     {clusterItems.length ? (
-                      clusterItems.map((item) => (
-                        <div
-                          key={item.id}
-                          className="rounded-2xl border border-[rgb(var(--border))]/40 bg-[rgb(var(--accent))]/10 px-3 py-2"
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <div>
-                              <p className="text-sm font-medium">{item.name}</p>
-                              <p className="text-xs text-[rgb(var(--muted-foreground))]">{formatAddedAt(item.added_at)}</p>
+                      clusterItems.map((item) => {
+                        const imageUrl = item.upc_image_url ?? item.upc_metadata?.image ?? null;
+                        return (
+                          <Link
+                            key={item.id}
+                            href={`/pantry/${item.id}`}
+                            className="flex items-center gap-3 rounded-2xl border border-[rgb(var(--border))]/40 bg-[rgb(var(--accent))]/10 px-3 py-2 transition hover:border-[rgb(var(--border))]"
+                          >
+                            {imageUrl ? (
+                              <Image
+                                src={imageUrl}
+                                alt={item.name}
+                                width={48}
+                                height={48}
+                                unoptimized
+                                className="h-12 w-12 rounded-xl object-cover"
+                              />
+                            ) : (
+                              <div className="flex h-12 w-12 items-center justify-center rounded-xl border border-dashed border-[rgb(var(--border))] text-[10px] text-[rgb(var(--muted-foreground))]">
+                                UPC
+                              </div>
+                            )}
+                            <div className="flex-1">
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <p className="text-sm font-medium">{item.name}</p>
+                                  <p className="text-xs text-[rgb(var(--muted-foreground))]">{formatAddedAt(item.added_at)}</p>
+                                </div>
+                                <RiskBadge level={riskFor(item)} />
+                              </div>
+                              <p className="mt-1 text-xs text-[rgb(var(--muted-foreground))]">
+                                {item.qty} {item.unit ?? ""} · {item.category ?? "Uncategorized"}
+                              </p>
                             </div>
-                            <RiskBadge level={riskFor(item)} />
-                          </div>
-                          <p className="mt-1 text-xs text-[rgb(var(--muted-foreground))]">
-                            {item.qty} {item.unit ?? ""} · {item.category ?? "Uncategorized"}
-                          </p>
-                        </div>
-                      ))
+                          </Link>
+                        );
+                      })
                     ) : (
                       <p className="text-xs text-[rgb(var(--muted-foreground))]">No items here.</p>
                     )}

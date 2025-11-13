@@ -88,6 +88,8 @@ export async function POST(request: Request) {
     category: item.category ?? null,
     storage: item.storage ?? "ambient",
     barcode: item.barcode ?? null,
+    upc_metadata: item.upc_metadata ?? null,
+    upc_image_url: item.upc_image_url ?? null,
     opened: item.opened ?? false,
     added_at: new Date().toISOString(),
     last_used_at: null,

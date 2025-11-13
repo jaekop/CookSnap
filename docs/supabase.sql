@@ -24,6 +24,8 @@ create table if not exists public.items (
   unit text,
   category text,
   barcode text,
+  upc_metadata jsonb,
+  upc_image_url text,
   storage text,
   opened boolean not null default false,
   added_at timestamptz not null default now(),
@@ -49,6 +51,20 @@ create table if not exists public.events (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.barcode_cache (
+  upc text primary key,
+  payload jsonb not null default '{}'::jsonb,
+  source text not null default 'open_food_facts',
+  last_verified_at timestamptz not null default now(),
+  hit_count integer not null default 0,
+  last_error text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.items add column if not exists upc_metadata jsonb;
+alter table public.items add column if not exists upc_image_url text;
+
 -- Helper for RLS
 create or replace function public.is_household_member(p_household uuid, p_user uuid)
 returns boolean
@@ -69,6 +85,7 @@ alter table public.household_members enable row level security;
 alter table public.items enable row level security;
 alter table public.recipes enable row level security;
 alter table public.events enable row level security;
+alter table public.barcode_cache enable row level security;
 
 -- Helper anonymous block to drop a policy if it exists
 -- Usage:
@@ -198,6 +215,53 @@ $$;
 CREATE POLICY "Members manage items" ON public.items
   FOR ALL USING (public.is_household_member(household_id, (SELECT auth.uid())))
   WITH CHECK (public.is_household_member(household_id, (SELECT auth.uid())));
+
+-- Barcode cache policies (any authenticated user)
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename = 'barcode_cache'
+      AND policyname = 'Authenticated read barcode cache'
+  ) THEN
+    EXECUTE 'DROP POLICY "Authenticated read barcode cache" ON public.barcode_cache';
+  END IF;
+END;
+$$;
+CREATE POLICY "Authenticated read barcode cache" ON public.barcode_cache
+  FOR SELECT USING ((SELECT auth.uid()) IS NOT NULL);
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename = 'barcode_cache'
+      AND policyname = 'Authenticated insert barcode cache'
+  ) THEN
+    EXECUTE 'DROP POLICY "Authenticated insert barcode cache" ON public.barcode_cache';
+  END IF;
+END;
+$$;
+CREATE POLICY "Authenticated insert barcode cache" ON public.barcode_cache
+  FOR INSERT WITH CHECK ((SELECT auth.uid()) IS NOT NULL);
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename = 'barcode_cache'
+      AND policyname = 'Authenticated update barcode cache'
+  ) THEN
+    EXECUTE 'DROP POLICY "Authenticated update barcode cache" ON public.barcode_cache';
+  END IF;
+END;
+$$;
+CREATE POLICY "Authenticated update barcode cache" ON public.barcode_cache
+  FOR UPDATE USING ((SELECT auth.uid()) IS NOT NULL)
+  WITH CHECK ((SELECT auth.uid()) IS NOT NULL);
 
 -- Recipes: world readable, members can manage
 DO $$

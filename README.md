@@ -1,6 +1,9 @@
-# CookSnap · Alpha v0.2
+<h1 align="left">
+  <img src="./public/favicon.svg" alt="CookSnap logo" width="100" height="100" style="vertical-align:middle;margin-right:12px;" />
+  CookSnap · Alpha v0.3
+</h1>
 
-CookSnap is a full-stack pantry ops platform built with Next.js App Router + Supabase. Scan barcodes, OCR receipts, or add items manually while a Supabase backend keeps risk bands, households, and recipes in sync. Alpha v0.2 adds a household shopping list workspace, richer pantry groupings, a profile hub, and refreshed branding. This README walks through the setup, current features, what’s coming next, and how the stack fits together.
+CookSnap is a full-stack pantry ops platform built with Next.js App Router + Supabase. Scan barcodes, OCR receipts, or add items manually while a Supabase backend keeps risk bands, households, and recipes in sync. Alpha v0.3 adds a household shopping list workspace, richer pantry groupings, a profile hub, refreshed branding, and tighter chat-ready copy throughout this README. This guide walks through the setup, current features, what’s coming next, and how the stack fits together.
 
 ## Installation & Setup (from zero)
 1. **Clone the repository**
@@ -46,9 +49,9 @@ CookSnap is a full-stack pantry ops platform built with Next.js App Router + Sup
    - `npm run typecheck` → TypeScript `--noEmit`
    - `npm run build` → Production build smoke test
 
-Once those steps are complete, CookSnap Alpha v0.2 is fully operational locally.
+Once those steps are complete, CookSnap Alpha v0.3 is fully operational locally.
 
-## Implemented Features (Alpha v0.2)
+## Implemented Features (Alpha v0.3)
 - **Supabase-authenticated households**: Users sign in via Google OAuth, and the API auto-creates a household + membership with safe RLS defaults (now resilient to RLS-returning errors thanks to UUID pre-generation).
 - **Three add flows**:
   - *Barcode scanning* (placeholder UI wired to ZXing WASM entry points).
@@ -123,4 +126,4 @@ biome.json          Lint/format rules
 README.md           You are here
 ```
 
-CookSnap Alpha v0.1 is stable enough for local demos; future milestones will layer in the planned shopping, notifications, and richer automation features. Contributions and issue reports are welcome—open a PR or drop feedback in the repo.
+CookSnap Alpha v0.3 is stable enough for local demos; future milestones will layer in the planned shopping, notifications, and richer automation features. Contributions and issue reports are welcome—open a PR or drop feedback in the repo.
