@@ -1,10 +1,11 @@
 "use client";
 
 import Image from "next/image";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import type { Item, Recipe } from "@/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { addRecipeIngredientsToShoppingList } from "@/lib/shopping-list";
 
 interface RecipeCardProps {
   recipe: Recipe;
@@ -25,6 +26,17 @@ export function RecipeCard({ recipe, pantryItems }: RecipeCardProps) {
   }, [recipe]);
   const ownedCount = ingredientTokens.filter((token) => pantrySet.has(token)).length;
   const missing = Math.max(ingredientTokens.length - ownedCount, 0);
+  const missingIngredients = useMemo(
+    () => recipe.ingredients.filter((ingredient) => !pantrySet.has(normalize(ingredient.name))),
+    [recipe.ingredients, pantrySet]
+  );
+  const [added, setAdded] = useState(false);
+
+  const handleAddIngredients = () => {
+    if (!missingIngredients.length) return;
+    addRecipeIngredientsToShoppingList(recipe.id, recipe.title, missingIngredients);
+    setAdded(true);
+  };
 
   return (
     <Card className="h-full overflow-hidden bg-[rgb(var(--accent))]/10">
@@ -61,6 +73,19 @@ export function RecipeCard({ recipe, pantryItems }: RecipeCardProps) {
             </a>
           </Button>
         ) : null}
+        <Button
+          type="button"
+          variant="secondary"
+          className="mt-2 w-full text-xs"
+          onClick={handleAddIngredients}
+          disabled={!missingIngredients.length || added}
+        >
+          {added
+            ? "Added to shopping list"
+            : missingIngredients.length
+            ? "Add ingredients to shopping list"
+            : "Pantry already stocked"}
+        </Button>
       </CardContent>
     </Card>
   );

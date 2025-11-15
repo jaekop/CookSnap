@@ -1,39 +1,20 @@
 "use client";
 
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  readManualEntries,
+  writeManualEntries,
+  SHOPPING_LIST_UPDATED_EVENT,
+  type ShoppingListManualEntry,
+} from "@/lib/shopping-list";
 import { cn } from "@/lib/utils";
 
-export interface SuggestedIngredient {
-  key: string;
-  name: string;
-  qty: number | null;
-  unit: string | null;
-  recipes: string[];
-}
-
-interface ShoppingListClientProps {
-  suggested: SuggestedIngredient[];
-}
-
-type ManualEntry = {
-  id: string;
-  name: string;
-  qty?: string;
-  unit?: string;
-  store?: string;
-  note?: string;
-  done: boolean;
-};
-
-const MANUAL_STORAGE_KEY = "cooksnap-shopping-manual";
-const AUTO_STORAGE_KEY = "cooksnap-shopping-auto";
-
-export function ShoppingListClient({ suggested }: ShoppingListClientProps) {
-  const [manualItems, setManualItems] = useState<ManualEntry[]>([]);
-  const [autoDone, setAutoDone] = useState<Record<string, boolean>>({});
+export function ShoppingListClient() {
+  const [manualItems, setManualItems] = useState<ShoppingListManualEntry[]>([]);
+  const [hydrated, setHydrated] = useState(false);
   const [formValues, setFormValues] = useState({
     name: "",
     qty: "",
@@ -49,45 +30,28 @@ export function ShoppingListClient({ suggested }: ShoppingListClientProps) {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    try {
-      const storedManual = window.localStorage.getItem(MANUAL_STORAGE_KEY);
-      if (storedManual) {
-        setManualItems(JSON.parse(storedManual) as ManualEntry[]);
-      }
-      const storedAuto = window.localStorage.getItem(AUTO_STORAGE_KEY);
-      if (storedAuto) {
-        setAutoDone(JSON.parse(storedAuto) as Record<string, boolean>);
-      }
-    } catch {
-      // ignore storage errors
-    }
+    setManualItems(readManualEntries());
+    setHydrated(true);
+
+    const handleUpdate = () => {
+      setManualItems(readManualEntries());
+    };
+    window.addEventListener(SHOPPING_LIST_UPDATED_EVENT, handleUpdate);
+    return () => {
+      window.removeEventListener(SHOPPING_LIST_UPDATED_EVENT, handleUpdate);
+    };
   }, []);
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(MANUAL_STORAGE_KEY, JSON.stringify(manualItems));
-  }, [manualItems]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(AUTO_STORAGE_KEY, JSON.stringify(autoDone));
-  }, [autoDone]);
-
-  const pendingSuggested = useMemo(
-    () => suggested.filter((item) => !autoDone[item.key]),
-    [suggested, autoDone]
-  );
-
-  const completedSuggested = useMemo(
-    () => suggested.filter((item) => autoDone[item.key]),
-    [suggested, autoDone]
-  );
+    if (!hydrated) return;
+    writeManualEntries(manualItems);
+  }, [manualItems, hydrated]);
 
   const handleManualSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const name = formValues.name.trim();
     if (!name) return;
-    const entry: ManualEntry = {
+    const entry: ShoppingListManualEntry = {
       id: typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}`,
       name,
       qty: formValues.qty.trim() || undefined,
@@ -98,10 +62,6 @@ export function ShoppingListClient({ suggested }: ShoppingListClientProps) {
     };
     setManualItems((items) => [entry, ...items]);
     setFormValues({ name: "", qty: "", unit: "", store: "", note: "" });
-  };
-
-  const toggleAutoItem = (key: string) => {
-    setAutoDone((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
   const toggleManualItem = (id: string) => {
@@ -115,27 +75,19 @@ export function ShoppingListClient({ suggested }: ShoppingListClientProps) {
   const downloadList = () => {
     const lines: string[] = [];
     lines.push("CookSnap shopping list", "");
-    if (pendingSuggested.length) {
-      lines.push("Auto suggestions:");
-      pendingSuggested.forEach((item) => {
-        const hasQty = item.qty !== null && item.qty !== undefined;
-        const qty = hasQty ? `${item.qty}${item.unit ? ` ${item.unit}` : ""}` : "";
-        const recipeHint = item.recipes.length ? ` (${item.recipes.join(", ")})` : "";
-        lines.push(`- ${item.name}${qty ? ` – ${qty}` : ""}${recipeHint}`);
-      });
-      lines.push("");
-    }
     const pendingManual = manualItems.filter((item) => !item.done);
     if (pendingManual.length) {
-      lines.push("Manual reminders:");
+      lines.push("Pending reminders:");
       pendingManual.forEach((item) => {
         const qty = item.qty ? `${item.qty}${item.unit ? ` ${item.unit}` : ""}` : "";
-        const meta = [qty, item.store, item.note].filter(Boolean).join(" · ");
+        const meta = [qty, item.store, item.note, item.sourceRecipeTitle ? `Recipe: ${item.sourceRecipeTitle}` : null]
+          .filter(Boolean)
+          .join(" · ");
         lines.push(`- ${item.name}${meta ? ` (${meta})` : ""}`);
       });
       lines.push("");
     }
-    if (!pendingSuggested.length && !pendingManual.length) {
+    if (!pendingManual.length) {
       lines.push("Nothing pending. 🎉");
     }
 
@@ -150,12 +102,14 @@ export function ShoppingListClient({ suggested }: ShoppingListClientProps) {
     URL.revokeObjectURL(url);
   };
 
+  const pendingCount = manualItems.filter((item) => !item.done).length;
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <p className="text-xs uppercase tracking-[0.3em] text-[rgb(var(--muted-foreground))]">Shopping intel</p>
-          <h2 className="text-2xl font-semibold">Rescue the missing pieces</h2>
+          <h2 className="text-2xl font-semibold">Build your grocery game plan</h2>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" size="sm" onClick={downloadList}>
@@ -165,66 +119,63 @@ export function ShoppingListClient({ suggested }: ShoppingListClientProps) {
       </div>
       <div className="grid gap-8 lg:grid-cols-[2fr_1fr]">
         <section className="space-y-4 rounded-3xl border border-[rgb(var(--border))]/60 p-6">
-          <div className="flex items-center justify-between">
+          <div className="flex items-start justify-between gap-4">
             <div>
-              <h3 className="text-lg font-semibold">Auto list</h3>
-              <p className="text-sm text-[rgb(var(--muted-foreground))]">Ingredients blocking your recommended recipes.</p>
+              <h3 className="text-lg font-semibold">Shopping list</h3>
+              <p className="text-sm text-[rgb(var(--muted-foreground))]">
+                Ingredients you pull from recipes plus any manual errands you jot down.
+              </p>
             </div>
-            <span className="text-xs text-[rgb(var(--muted-foreground))]">{pendingSuggested.length} pending</span>
+            <span className="text-xs text-[rgb(var(--muted-foreground))]">{pendingCount} pending</span>
           </div>
           <div className="space-y-3">
-            {suggested.length === 0 ? (
-              <p className="text-sm text-[rgb(var(--muted-foreground))]">Every recipe is covered. Time to cook!</p>
+            {manualItems.length === 0 ? (
+              <p className="text-sm text-[rgb(var(--muted-foreground))]">
+                Tap “Add ingredients to shopping list” on a recipe card or drop manual reminders using the form.
+              </p>
             ) : (
-              suggested.map((item) => {
-                const isDone = !!autoDone[item.key];
-                const cappedRecipes = item.recipes.slice(0, 3);
-                const extraCount = item.recipes.length - cappedRecipes.length;
-                const recipeDetails = `${cappedRecipes.join(", ")}${extraCount > 0 ? ` +${extraCount} more` : ""}`;
-                return (
-                  <div
-                    key={item.key}
-                    className={cn(
-                      "rounded-2xl border border-[rgb(var(--border))]/50 px-4 py-3 transition",
-                      isDone ? "bg-[rgb(var(--accent))]/10 opacity-60 line-through" : "bg-[rgb(var(--accent))]/5"
-                    )}
-                  >
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <p className="text-sm font-semibold">{item.name}</p>
-                        <p className="text-xs text-[rgb(var(--muted-foreground))]">
-                          {item.qty !== null && item.qty !== undefined
-                            ? `${item.qty}${item.unit ? ` ${item.unit}` : ""}`
-                            : "qty flexible"}{" "}
-                          ({recipeDetails})
-                        </p>
-                      </div>
-                      <Button size="sm" variant="ghost" onClick={() => toggleAutoItem(item.key)}>
-                        {isDone ? "Undo" : "Mark bought"}
+              manualItems.map((item) => (
+                <div
+                  key={item.id}
+                  className={cn(
+                    "rounded-2xl border border-[rgb(var(--border))]/50 px-4 py-3",
+                    item.done ? "opacity-60 line-through" : ""
+                  )}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold">{item.name}</p>
+                      <p className="text-xs text-[rgb(var(--muted-foreground))]">
+                        {[
+                          item.qty ? `${item.qty}${item.unit ? ` ${item.unit}` : ""}` : null,
+                          item.store ?? null,
+                          item.note ?? null,
+                          item.sourceRecipeTitle ? `Recipe: ${item.sourceRecipeTitle}` : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ") || "Just a reminder"}
+                      </p>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button size="sm" variant="ghost" onClick={() => toggleManualItem(item.id)}>
+                        {item.done ? "Undo" : "Done"}
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => removeManualItem(item.id)}>
+                        Remove
                       </Button>
                     </div>
                   </div>
-                );
-              })
+                </div>
+              ))
             )}
           </div>
-          {completedSuggested.length ? (
-            <details className="rounded-2xl border border-dashed border-[rgb(var(--border))]/60 px-4 py-3">
-              <summary className="cursor-pointer text-xs uppercase tracking-widest text-[rgb(var(--muted-foreground))]">
-                {completedSuggested.length} archived item(s)
-              </summary>
-              <ul className="mt-2 space-y-1 text-xs text-[rgb(var(--muted-foreground))]">
-                {completedSuggested.map((item) => (
-                  <li key={`${item.key}-completed`}>{item.name}</li>
-                ))}
-              </ul>
-            </details>
-          ) : null}
         </section>
         <section className="space-y-4 rounded-3xl border border-[rgb(var(--border))]/60 p-6">
           <div>
-            <h3 className="text-lg font-semibold">Manual reminders</h3>
-            <p className="text-sm text-[rgb(var(--muted-foreground))]">Add the one-off items or other errands.</p>
+            <h3 className="text-lg font-semibold">Manual add-ons</h3>
+            <p className="text-sm text-[rgb(var(--muted-foreground))]">
+              Need to remember staples, errands, or drop-offs? Park them here.
+            </p>
           </div>
           <form className="space-y-3" onSubmit={handleManualSubmit}>
             <div className="space-y-1.5">
@@ -240,24 +191,24 @@ export function ShoppingListClient({ suggested }: ShoppingListClientProps) {
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label htmlFor={manualQtyId}>Qty</Label>
-              <Input
-                id={manualQtyId}
-                placeholder="2"
-                className="sm:max-w-[160px]"
-                value={formValues.qty}
-                onChange={(event) => setFormValues((prev) => ({ ...prev, qty: event.target.value }))}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor={manualUnitId}>Unit</Label>
-              <Input
-                id={manualUnitId}
-                placeholder="cartons"
-                className="sm:max-w-[160px]"
-                value={formValues.unit}
-                onChange={(event) => setFormValues((prev) => ({ ...prev, unit: event.target.value }))}
-              />
-            </div>
+                <Input
+                  id={manualQtyId}
+                  placeholder="2"
+                  className="sm:max-w-[160px]"
+                  value={formValues.qty}
+                  onChange={(event) => setFormValues((prev) => ({ ...prev, qty: event.target.value }))}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor={manualUnitId}>Unit</Label>
+                <Input
+                  id={manualUnitId}
+                  placeholder="cartons"
+                  className="sm:max-w-[160px]"
+                  value={formValues.unit}
+                  onChange={(event) => setFormValues((prev) => ({ ...prev, unit: event.target.value }))}
+                />
+              </div>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor={manualStoreId}>Store / aisle</Label>
@@ -282,44 +233,6 @@ export function ShoppingListClient({ suggested }: ShoppingListClientProps) {
               Add reminder
             </Button>
           </form>
-          <div className="space-y-3">
-            {manualItems.length === 0 ? (
-              <p className="text-sm text-[rgb(var(--muted-foreground))]">No manual reminders yet.</p>
-            ) : (
-              manualItems.map((item) => (
-                <div
-                  key={item.id}
-                  className={cn(
-                    "rounded-2xl border border-[rgb(var(--border))]/50 px-4 py-3",
-                    item.done ? "opacity-60 line-through" : ""
-                  )}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="text-sm font-semibold">{item.name}</p>
-                      <p className="text-xs text-[rgb(var(--muted-foreground))]">
-                        {[
-                          item.qty ? `${item.qty}${item.unit ? ` ${item.unit}` : ""}` : null,
-                          item.store ?? null,
-                          item.note ?? null,
-                        ]
-                          .filter(Boolean)
-                          .join(" · ") || "Just a reminder"}
-                      </p>
-                    </div>
-                    <div className="flex gap-2">
-                      <Button size="sm" variant="ghost" onClick={() => toggleManualItem(item.id)}>
-                        {item.done ? "Undo" : "Done"}
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => removeManualItem(item.id)}>
-                        Remove
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
         </section>
       </div>
     </div>

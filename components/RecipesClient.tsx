@@ -6,6 +6,15 @@ import { RecipeCard } from "@/components/RecipeCard";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 
+const LOADING_MESSAGES = [
+  "Loading the all the tastiness...",
+  "Cook. Snap. Yum.",
+  "For any support, email cooksnapsoftware@gmail.com",
+  "Whisking up pantry-powered matches...",
+  "Simmering through our recipe cloud...",
+  "Seasoning results with a pinch of patience...",
+];
+
 interface RecipesClientProps {
   items: Item[];
   featured: Recipe[];
@@ -20,10 +29,12 @@ export function RecipesClient({ items, featured, pantryMatches, useNow, fallback
   const [results, setResults] = useState<Recipe[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadingMessageIndex, setLoadingMessageIndex] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
     const trimmed = query.trim();
+    let isCurrent = true;
 
     if (!trimmed) {
       setResults([]);
@@ -35,24 +46,46 @@ export function RecipesClient({ items, featured, pantryMatches, useNow, fallback
     const fetchResults = async () => {
       setLoading(true);
       setError(null);
+      setResults([]);
       try {
         const response = await fetch(`/api/recipes/search?q=${encodeURIComponent(trimmed)}`, { signal: controller.signal });
         const body = (await response.json()) as { data?: Recipe[] };
-        setResults(body.data ?? []);
+        if (isCurrent) {
+          setResults(body.data ?? []);
+        }
       } catch (err) {
-        if ((err as Error).name !== "AbortError") {
+        if ((err as Error).name !== "AbortError" && isCurrent) {
           setError("Search failed. Try again.");
         }
       } finally {
-        setLoading(false);
+        if (isCurrent) {
+          setLoading(false);
+        }
       }
     };
 
     fetchResults();
-    return () => controller.abort();
+    return () => {
+      isCurrent = false;
+      controller.abort();
+    };
   }, [query]);
 
+  useEffect(() => {
+    if (!loading) {
+      setLoadingMessageIndex(0);
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      setLoadingMessageIndex((prev) => (prev + 1) % LOADING_MESSAGES.length);
+    }, 2400);
+
+    return () => window.clearInterval(interval);
+  }, [loading]);
+
   const showSearchResults = Boolean(query.trim());
+  const loadingMessage = LOADING_MESSAGES[loadingMessageIndex];
 
   const unavailableNotice = useMemo(() => {
     if (datasetAvailable) return null;
@@ -88,8 +121,10 @@ export function RecipesClient({ items, featured, pantryMatches, useNow, fallback
           <div className="grid gap-4 md:grid-cols-2">
             {results.length ? (
               results.map((recipe) => <RecipeCard key={recipe.id} recipe={recipe} pantryItems={items} />)
-            ) : loading ? null : (
-              <p className="text-sm text-[rgb(var(--muted-foreground))]">No recipes matched that search.</p>
+            ) : loading ? (
+              <LoadingState message={loadingMessage} />
+            ) : (
+              <p className="col-span-2 text-sm text-[rgb(var(--muted-foreground))]">No recipes matched that search.</p>
             )}
           </div>
         </div>
@@ -136,5 +171,18 @@ function RecipeSection({ title, subtitle, recipes, fallback, items }: RecipeSect
         ))}
       </div>
     </section>
+  );
+}
+
+interface LoadingStateProps {
+  message: string;
+}
+
+function LoadingState({ message }: LoadingStateProps) {
+  return (
+    <div className="col-span-2 flex h-32 flex-col items-center justify-center rounded-xl border border-dashed border-[rgb(var(--muted-foreground))] bg-[rgba(255,255,255,0.03)] p-6 text-center">
+      <p className="text-base font-semibold text-[rgb(var(--foreground))]">Searching for delicious matches</p>
+      <p className="mt-2 text-xs uppercase tracking-wide text-[rgb(var(--muted-foreground))]">{message}</p>
+    </div>
   );
 }
