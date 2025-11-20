@@ -7,6 +7,7 @@ import recipes from "@/data/recipes.json";
 import { getUseItNow } from "@/lib/recommend";
 import { createSupabaseServerClient, requireUserId } from "@/lib/supabase";
 import { riskFor } from "@/lib/risk";
+import { getStorageCategoryLabel, normalizeStorageCategory } from "@/lib/storage";
 import type { Item, Recipe } from "@/types";
 
 async function getDashboard() {
@@ -15,28 +16,33 @@ async function getDashboard() {
   try {
     const userId = await requireUserId(supabase);
 
-    const { data: membership } = await supabase
+    const membershipPromise = supabase
       .from("household_members")
       .select("household_id")
       .eq("user_id", userId)
       .maybeSingle();
 
-    const householdId = membership?.household_id ?? null;
-
-    const { data: items = [] } = await supabase
-      .from("items")
-      .select("*")
-      .eq("household_id", householdId)
-      .order("added_at", { ascending: false });
-
-    const { data: events = [] } = await supabase
+    const eventsPromise = supabase
       .from("events")
       .select("*")
       .eq("user_id", userId)
       .order("created_at", { ascending: false })
       .limit(6);
 
-    const typedItems = items as Item[];
+    const [{ data: membership }, { data: events = [] }] = await Promise.all([membershipPromise, eventsPromise]);
+
+    const householdId = membership?.household_id ?? null;
+    let typedItems: Item[] = [];
+
+    if (householdId) {
+      const { data: items = [] } = await supabase
+        .from("items")
+        .select("*, storage_location:storage_locations(*)")
+        .eq("household_id", householdId)
+        .order("added_at", { ascending: false });
+      typedItems = items as Item[];
+    }
+
     const recommended = getUseItNow(typedItems, recipes as Recipe[]);
 
     const summary = {
@@ -147,7 +153,8 @@ export default async function HomePage() {
               <div>
                 <p className="text-sm font-semibold">{item.name}</p>
                 <p className="text-xs text-[rgb(var(--muted-foreground))]">
-                  {item.qty} {item.unit ?? ""} · {item.storage ?? "unknown"}
+                  {item.qty} {item.unit ?? ""} ·{" "}
+                  {item.storage_location?.name ?? getStorageCategoryLabel(normalizeStorageCategory(item.storage))}
                 </p>
               </div>
               <RiskBadge level={riskFor(item)} />

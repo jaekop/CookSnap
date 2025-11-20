@@ -6,11 +6,16 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { track } from "@/lib/analytics";
-import type { BarcodeLookupResponse } from "@/types";
+import type { BarcodeLookupResponse, StorageCategory } from "@/types";
 
 const UPC_PLACEHOLDER = "012993441012";
 
-export function BarcodeAdd() {
+interface BarcodeAddProps {
+  defaultStorageId?: string | null;
+  defaultStorageCategory?: StorageCategory;
+}
+
+export function BarcodeAdd({ defaultStorageId, defaultStorageCategory = "dry" }: BarcodeAddProps = {}) {
   const [scanning, setScanning] = useState(false);
   const [barcode, setBarcode] = useState("");
   const [lookupLoading, setLookupLoading] = useState(false);
@@ -255,7 +260,8 @@ export function BarcodeAdd() {
       qty: 1,
       unit: result.product.quantity ?? null,
       category: derivedCategory,
-      storage: "ambient",
+      storage: defaultStorageCategory,
+      storage_location_id: defaultStorageId ?? null,
       barcode: result.upc,
       upc_metadata: result.product,
       upc_image_url: result.product.image ?? null,
@@ -280,7 +286,7 @@ export function BarcodeAdd() {
     } finally {
       setAddLoading(false);
     }
-  }, [clearResult, result]);
+  }, [clearResult, defaultStorageCategory, defaultStorageId, result]);
 
   return (
     <div className="space-y-4">

@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { PantryItemEditor } from "@/components/PantryItemEditor";
 import { RiskBadge } from "@/components/RiskBadge";
 import { createSupabaseServerClient, requireUserId } from "@/lib/supabase";
+import { ensureDefaultStorageLocations, fetchStorageLocations } from "@/lib/storage-server";
 import type { BarcodeProduct, Item } from "@/types";
 
 async function loadItem(id: string) {
@@ -18,17 +19,22 @@ async function loadItem(id: string) {
     .maybeSingle();
 
   if (membershipError || !membership?.household_id) {
-    return { item: null };
+    return { item: null, storages: [] };
   }
 
-  const { data: item } = await supabase
-    .from("items")
-    .select("*")
-    .eq("household_id", membership.household_id)
-    .eq("id", id)
-    .maybeSingle<Item>();
+  await ensureDefaultStorageLocations(supabase, membership.household_id);
 
-  return { item: item ?? null };
+  const [{ data: item }, storages] = await Promise.all([
+    supabase
+      .from("items")
+      .select("*, storage_location:storage_locations(*)")
+      .eq("household_id", membership.household_id)
+      .eq("id", id)
+      .maybeSingle<Item>(),
+    fetchStorageLocations(supabase, membership.household_id),
+  ]);
+
+  return { item: item ?? null, storages };
 }
 
 interface PantryItemPageProps {
@@ -36,7 +42,7 @@ interface PantryItemPageProps {
 }
 
 export default async function PantryItemPage({ params }: PantryItemPageProps) {
-  const { item } = await loadItem(params.id);
+  const { item, storages } = await loadItem(params.id);
 
   if (!item) {
     notFound();
@@ -52,7 +58,7 @@ export default async function PantryItemPage({ params }: PantryItemPageProps) {
         ← Back to pantry
       </Link>
       <div className="grid gap-6 lg:grid-cols-[3fr,2fr]">
-        <PantryItemEditor item={item} />
+        <PantryItemEditor item={item} storages={storages} />
         <aside className="space-y-4">
           <div className="space-y-3 rounded-3xl border border-[rgb(var(--border))] bg-[rgb(var(--card))] p-6 shadow-sm">
             <div className="flex items-center justify-between">

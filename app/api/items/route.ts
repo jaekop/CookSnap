@@ -1,48 +1,41 @@
 import { NextResponse } from "next/server";
-import { randomUUID } from "node:crypto";
 import { riskFor } from "@/lib/risk";
+import { resolveHouseholdId } from "@/lib/households";
+import { ensureDefaultStorageLocations, fetchStorageLocations } from "@/lib/storage-server";
+import { normalizeStorageCategory } from "@/lib/storage";
 import { createSupabaseRouteClient, requireUserId } from "@/lib/supabase";
-import type { Item } from "@/types";
+import type { Item, StorageCategory, StorageLocation } from "@/types";
 
-async function resolveHouseholdId(supabase: Awaited<ReturnType<typeof createSupabaseRouteClient>>, userId: string) {
-  const fetchMembership = async () =>
-    supabase
-      .from("household_members")
-      .select("household_id")
-      .eq("user_id", userId)
-      .maybeSingle();
-
-  const { data: membership } = await fetchMembership();
-  if (membership?.household_id) {
-    return membership.household_id;
-  }
-
-  const newHouseholdId = randomUUID();
-  const { error: householdError } = await supabase.from("households").insert({ id: newHouseholdId, name: "CookSnap household" });
-
-  if (householdError) {
-    if (householdError.code === "42501") {
-      throw new Error(
-        "Household setup is blocked by RLS. Run docs/supabase.sql in your Supabase project (or allow inserts on public.households) before adding items."
-      );
+function buildStorageLookups(locations: StorageLocation[]) {
+  const byId = new Map<string, StorageLocation>();
+  const byCategory = new Map<StorageCategory, StorageLocation>();
+  for (const location of locations) {
+    byId.set(location.id, location);
+    if (!byCategory.has(location.category)) {
+      byCategory.set(location.category, location);
     }
-    const { data: retryMembership } = await fetchMembership();
-    if (retryMembership?.household_id) {
-      return retryMembership.household_id;
+  }
+  return { byId, byCategory, first: locations[0] ?? null };
+}
+
+function resolveStorageLocation(
+  lookups: ReturnType<typeof buildStorageLookups>,
+  requestedId?: string | null,
+  requestedCategory?: StorageCategory | null
+) {
+  if (requestedId) {
+    const match = lookups.byId.get(requestedId);
+    if (match) {
+      return match;
     }
-    throw householdError ?? new Error("Unable to create household");
   }
-
-  const { error: membershipError } = await supabase.from("household_members").insert({
-    household_id: newHouseholdId,
-    user_id: userId,
-  });
-
-  if (membershipError && membershipError.code !== "23505") {
-    throw membershipError;
+  if (requestedCategory) {
+    const match = lookups.byCategory.get(requestedCategory);
+    if (match) {
+      return match;
+    }
   }
-
-  return newHouseholdId;
+  return lookups.first ?? null;
 }
 
 export async function GET() {
@@ -54,10 +47,11 @@ export async function GET() {
     return NextResponse.json({ error: (error as Error).message }, { status: 401 });
   }
   const householdId = await resolveHouseholdId(supabase, userId);
+  await ensureDefaultStorageLocations(supabase, householdId);
 
   const { data, error } = await supabase
     .from("items")
-    .select("*")
+    .select("*, storage_location:storage_locations(*)")
     .eq("household_id", householdId)
     .order("added_at", { ascending: false });
 
@@ -77,28 +71,38 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: (error as Error).message }, { status: 401 });
   }
   const householdId = await resolveHouseholdId(supabase, userId);
+  await ensureDefaultStorageLocations(supabase, householdId);
+  const storageLocations = await fetchStorageLocations(supabase, householdId);
+  const lookups = buildStorageLookups(storageLocations);
 
   const payload = await request.json();
   const items = Array.isArray(payload.items) ? payload.items : [payload];
 
-  const inserts = items.map((item) => ({
-    name: item.name,
-    qty: item.qty ?? 1,
-    unit: item.unit ?? null,
-    category: item.category ?? null,
-    storage: item.storage ?? "ambient",
-    barcode: item.barcode ?? null,
-    upc_metadata: item.upc_metadata ?? null,
-    upc_image_url: item.upc_image_url ?? null,
-    opened: item.opened ?? false,
-    added_at: new Date().toISOString(),
-    last_used_at: null,
-    risk_level: "safe",
-    user_id: userId,
-    household_id: householdId,
-  }));
+  const inserts = items.map((item) => {
+    const requestedCategory = normalizeStorageCategory(item.storage);
+    const requestedLocationId = typeof item.storage_location_id === "string" ? item.storage_location_id : undefined;
+    const location = resolveStorageLocation(lookups, requestedLocationId, requestedCategory);
+    const storageCategory: StorageCategory = location?.category ?? requestedCategory ?? "dry";
+    return {
+      name: item.name,
+      qty: item.qty ?? 1,
+      unit: item.unit ?? null,
+      category: item.category ?? null,
+      storage: storageCategory,
+      storage_location_id: location?.id ?? lookups.first?.id ?? null,
+      barcode: item.barcode ?? null,
+      upc_metadata: item.upc_metadata ?? null,
+      upc_image_url: item.upc_image_url ?? null,
+      opened: item.opened ?? false,
+      added_at: new Date().toISOString(),
+      last_used_at: null,
+      risk_level: "safe",
+      user_id: userId,
+      household_id: householdId,
+    };
+  });
 
-  const { data, error } = await supabase.from("items").insert(inserts).select("*");
+  const { data, error } = await supabase.from("items").insert(inserts).select("*, storage_location:storage_locations(*)");
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 400 });
@@ -115,10 +119,61 @@ export async function PATCH(request: Request) {
   } catch (error) {
     return NextResponse.json({ error: (error as Error).message }, { status: 401 });
   }
-  const { id, updates } = await request.json();
+  const { id, ids, updates } = await request.json();
 
-  if (!id || !updates) {
-    return NextResponse.json({ error: "Missing id or updates" }, { status: 400 });
+  if ((!id && !ids?.length) || !updates) {
+    return NextResponse.json({ error: "Missing id(s) or updates" }, { status: 400 });
+  }
+
+
+  // Bulk move: allow changing storage on many items at once
+  if (Array.isArray(ids) && ids.length) {
+    const storageIdProvided = Object.hasOwn(updates, "storage_location_id");
+    const storageKeyProvided = Object.hasOwn(updates, "storage");
+    if (!storageIdProvided && !storageKeyProvided) {
+      return NextResponse.json({ error: "Bulk updates must target storage" }, { status: 400 });
+    }
+
+    const { data: firstItem, error: firstError } = await supabase
+      .from("items")
+      .select("household_id")
+      .eq("id", ids[0])
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (firstError) {
+      return NextResponse.json({ error: firstError.message }, { status: 400 });
+    }
+    if (!firstItem) {
+      return NextResponse.json({ error: "Item not found" }, { status: 404 });
+    }
+
+    await ensureDefaultStorageLocations(supabase, firstItem.household_id);
+    const storageLocations = await fetchStorageLocations(supabase, firstItem.household_id);
+    const lookups = buildStorageLookups(storageLocations);
+
+    const requestedId =
+      storageIdProvided && typeof updates.storage_location_id === "string" ? updates.storage_location_id : undefined;
+    const requestedCategory = storageKeyProvided ? normalizeStorageCategory(updates.storage) : null;
+    const location = resolveStorageLocation(lookups, requestedId, requestedCategory);
+
+    const updatePayload = {
+      storage: location?.category ?? requestedCategory ?? null,
+      storage_location_id: location?.id ?? null,
+    };
+
+    const { data, error } = await supabase
+      .from("items")
+      .update(updatePayload)
+      .in("id", ids)
+      .eq("user_id", userId)
+      .select("*, storage_location:storage_locations(*)");
+
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+
+    return NextResponse.json({ data });
   }
 
   const { data: existing, error: fetchError } = await supabase
@@ -136,15 +191,45 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: "Item not found" }, { status: 404 });
   }
 
-  const updatedItem = { ...(existing as Item), ...updates } as Item;
+  const existingItem = existing as Item;
+  const updatedPayload: Record<string, unknown> = { ...updates };
+  const hasStorageUpdate = Object.hasOwn(updates, "storage_location_id") || Object.hasOwn(updates, "storage");
+
+  if (hasStorageUpdate) {
+    await ensureDefaultStorageLocations(supabase, existingItem.household_id);
+    const storageLocations = await fetchStorageLocations(supabase, existingItem.household_id);
+    const lookups = buildStorageLookups(storageLocations);
+    const storageIdProvided = Object.hasOwn(updates, "storage_location_id");
+    const storageKeyProvided = Object.hasOwn(updates, "storage");
+    const requestedId =
+      storageIdProvided && typeof updates.storage_location_id === "string" ? updates.storage_location_id : undefined;
+    const requestedCategory = storageKeyProvided ? normalizeStorageCategory(updates.storage) : null;
+    const location =
+      storageIdProvided && updates.storage_location_id === null && !requestedCategory
+        ? null
+        : resolveStorageLocation(lookups, requestedId, requestedCategory);
+
+    if (storageIdProvided) {
+      updatedPayload.storage_location_id = location?.id ?? (updates.storage_location_id === null ? null : existingItem.storage_location_id ?? null);
+    } else if (location) {
+      updatedPayload.storage_location_id = location.id;
+    }
+
+    const fallbackCategory =
+      location?.category ?? requestedCategory ?? normalizeStorageCategory(existingItem.storage) ?? "dry";
+    updatedPayload.storage = fallbackCategory;
+  }
+
+  const sanitizedUpdates = Object.fromEntries(Object.entries(updatedPayload).filter(([, value]) => value !== undefined));
+  const updatedItem = { ...existingItem, ...sanitizedUpdates } as Item;
   const nextRisk = riskFor(updatedItem);
 
   const { data, error } = await supabase
     .from("items")
-    .update({ ...updates, risk_level: nextRisk })
+    .update({ ...sanitizedUpdates, risk_level: nextRisk })
     .eq("id", id)
     .eq("user_id", userId)
-    .select("*")
+    .select("*, storage_location:storage_locations(*)")
     .maybeSingle();
 
   if (error) {

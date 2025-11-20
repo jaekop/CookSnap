@@ -15,6 +15,15 @@ create table if not exists public.household_members (
   primary key (household_id, user_id)
 );
 
+create table if not exists public.storage_locations (
+  id uuid primary key default gen_random_uuid(),
+  household_id uuid not null references public.households(id) on delete cascade,
+  name text not null,
+  category text not null check (category in ('dry', 'fridge', 'freezer')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 create table if not exists public.items (
   id uuid primary key default gen_random_uuid(),
   user_id uuid references auth.users(id) on delete set null,
@@ -27,6 +36,7 @@ create table if not exists public.items (
   upc_metadata jsonb,
   upc_image_url text,
   storage text,
+  storage_location_id uuid references public.storage_locations(id) on delete set null,
   opened boolean not null default false,
   added_at timestamptz not null default now(),
   last_used_at timestamptz,
@@ -64,6 +74,7 @@ create table if not exists public.barcode_cache (
 
 alter table public.items add column if not exists upc_metadata jsonb;
 alter table public.items add column if not exists upc_image_url text;
+alter table public.items add column if not exists storage_location_id uuid references public.storage_locations(id) on delete set null;
 
 create table if not exists public.external_recipes (
   id uuid primary key default gen_random_uuid(),
@@ -84,6 +95,14 @@ create table if not exists public.external_recipes (
   unique(provider, external_id)
 );
 
+-- Performance indexes
+create index if not exists household_members_user_idx on public.household_members(user_id);
+create index if not exists items_household_idx on public.items(household_id, added_at desc);
+create index if not exists items_user_idx on public.items(user_id);
+create index if not exists storage_locations_household_idx on public.storage_locations(household_id);
+create index if not exists items_storage_location_idx on public.items(storage_location_id);
+create index if not exists events_user_idx on public.events(user_id, created_at desc);
+
 -- Helper for RLS
 create or replace function public.is_household_member(p_household uuid, p_user uuid)
 returns boolean
@@ -101,6 +120,7 @@ $$;
 -- Enable RLS on tables
 alter table public.households enable row level security;
 alter table public.household_members enable row level security;
+alter table public.storage_locations enable row level security;
 alter table public.items enable row level security;
 alter table public.recipes enable row level security;
 alter table public.events enable row level security;
@@ -203,6 +223,38 @@ END;
 $$;
 CREATE POLICY "Members remove themselves" ON public.household_members
   FOR DELETE USING (user_id = (SELECT auth.uid()));
+
+-- Storage location policies
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename = 'storage_locations'
+      AND policyname = 'Members read storage'
+  ) THEN
+    EXECUTE 'DROP POLICY "Members read storage" ON public.storage_locations';
+  END IF;
+END;
+$$;
+CREATE POLICY "Members read storage" ON public.storage_locations
+  FOR SELECT USING (public.is_household_member(household_id, (SELECT auth.uid())));
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename = 'storage_locations'
+      AND policyname = 'Members manage storage'
+  ) THEN
+    EXECUTE 'DROP POLICY "Members manage storage" ON public.storage_locations';
+  END IF;
+END;
+$$;
+CREATE POLICY "Members manage storage" ON public.storage_locations
+  FOR ALL USING (public.is_household_member(household_id, (SELECT auth.uid())))
+  WITH CHECK (public.is_household_member(household_id, (SELECT auth.uid())));
 
 -- Items policies
 DO $$
@@ -403,10 +455,17 @@ insert into public.household_members (household_id, user_id)
 values ('11111111-1111-1111-1111-111111111111', '51689886-17c8-40e8-acd8-1566f14f4edc')
 on conflict do nothing;
 
-insert into public.items (id, user_id, household_id, name, qty, unit, category, storage, opened, risk_level, added_at)
+insert into public.storage_locations (id, household_id, name, category)
 values
-  ('20000000-0000-0000-0000-000000000001', '51689886-17c8-40e8-acd8-1566f14f4edc', '11111111-1111-1111-1111-111111111111', 'Baby Spinach', 1, 'pack', 'Produce', 'fridge', false, 'caution', now() - interval '4 days'),
-  ('20000000-0000-0000-0000-000000000002', '51689886-17c8-40e8-acd8-1566f14f4edc', '11111111-1111-1111-1111-111111111111', 'Greek Yogurt', 1, 'tub', 'Dairy', 'fridge', false, 'use-now', now() - interval '9 days')
+  ('21111111-1111-1111-1111-111111111111', '11111111-1111-1111-1111-111111111111', 'Dry storage', 'dry'),
+  ('21111111-1111-1111-1111-222222222222', '11111111-1111-1111-1111-111111111111', 'Fridge storage', 'fridge'),
+  ('21111111-1111-1111-1111-333333333333', '11111111-1111-1111-1111-111111111111', 'Freezer storage', 'freezer')
+on conflict (id) do nothing;
+
+insert into public.items (id, user_id, household_id, name, qty, unit, category, storage, storage_location_id, opened, risk_level, added_at)
+values
+  ('20000000-0000-0000-0000-000000000001', '51689886-17c8-40e8-acd8-1566f14f4edc', '11111111-1111-1111-1111-111111111111', 'Baby Spinach', 1, 'pack', 'Produce', 'fridge', '21111111-1111-1111-1111-222222222222', false, 'caution', now() - interval '4 days'),
+  ('20000000-0000-0000-0000-000000000002', '51689886-17c8-40e8-acd8-1566f14f4edc', '11111111-1111-1111-1111-111111111111', 'Greek Yogurt', 1, 'tub', 'Dairy', 'fridge', '21111111-1111-1111-1111-222222222222', false, 'use-now', now() - interval '9 days')
 on conflict (id) do nothing;
 
 insert into public.recipes (id, title, time_min, diet, tags, ingredients)

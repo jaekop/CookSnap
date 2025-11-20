@@ -5,6 +5,9 @@ import { ReceiptAdd } from "@/components/ReceiptAdd";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { createSupabaseServerClient } from "@/lib/supabase";
+import { resolveHouseholdId } from "@/lib/households";
+import { ensureDefaultStorageLocations, fetchStorageLocations } from "@/lib/storage-server";
+import type { StorageLocation } from "@/types";
 
 function SectionHeading({ name }: { name?: string }) {
   return (
@@ -37,6 +40,13 @@ export default async function AddPage() {
     data: { user },
   } = await supabase.auth.getUser();
   const greetingName = user?.user_metadata?.full_name?.split(" ")[0] ?? user?.email ?? undefined;
+  let storageLocations: StorageLocation[] = [];
+
+  if (user) {
+    const householdId = await resolveHouseholdId(supabase, user.id);
+    await ensureDefaultStorageLocations(supabase, householdId);
+    storageLocations = await fetchStorageLocations(supabase, householdId);
+  }
 
   return (
     <div className="grid gap-6 lg:grid-cols-[3fr,2fr]">
@@ -50,14 +60,17 @@ export default async function AddPage() {
           </TabsList>
           <TabsContent value="barcode">
             <Suspense fallback={<Button disabled>Loading scanner…</Button>}>
-              <BarcodeAdd />
+              <BarcodeAdd
+                defaultStorageId={storageLocations[0]?.id}
+                defaultStorageCategory={storageLocations[0]?.category}
+              />
             </Suspense>
           </TabsContent>
           <TabsContent value="receipt">
             <ReceiptAdd />
           </TabsContent>
           <TabsContent value="manual">
-            <AddManual />
+            <AddManual initialStorages={storageLocations} />
           </TabsContent>
         </Tabs>
       </div>

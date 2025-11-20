@@ -14,5 +14,22 @@
   },
   "formatter": {
     "enabled": true
+  },
+  "files": {
+    "experimentalScannerIgnores": [
+      ".next"
+    ],
+    "includes": [
+      "app/**/*",
+      "components/**/*",
+      "lib/**/*",
+      "scripts/**/*",
+      "docs/**/*",
+      "types/**/*",
+      "styles/**/*",
+      "package.json",
+      "tsconfig.json",
+      "biome.json"
+    ]
   }
 }

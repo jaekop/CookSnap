@@ -1,30 +1,32 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { Item } from "@/types";
+import type { Item, StorageLocation } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-
-const STORAGE_OPTIONS = [
-  { label: "Pantry", value: "ambient" },
-  { label: "Fridge", value: "fridge" },
-  { label: "Freezer", value: "freezer" },
-];
+import { STORAGE_CATEGORY_METADATA, normalizeStorageCategory } from "@/lib/storage";
 
 interface PantryItemEditorProps {
   item: Item;
+  storages: StorageLocation[];
 }
 
-export function PantryItemEditor({ item }: PantryItemEditorProps) {
+export function PantryItemEditor({ item, storages }: PantryItemEditorProps) {
   const router = useRouter();
+  const normalizedCategory = normalizeStorageCategory(item.storage);
+  const inferredStorageId =
+    item.storage_location_id ??
+    (normalizedCategory ? storages.find((storage) => storage.category === normalizedCategory)?.id : undefined) ??
+    "";
+
   const [form, setForm] = useState({
     name: item.name,
     qty: item.qty.toString(),
     unit: item.unit ?? "",
     category: item.category ?? "",
-    storage: item.storage ?? "ambient",
+    storageId: inferredStorageId,
     opened: item.opened,
   });
   const [saving, setSaving] = useState(false);
@@ -53,7 +55,8 @@ export function PantryItemEditor({ item }: PantryItemEditorProps) {
             qty: Number(form.qty) || 1,
             unit: form.unit || null,
             category: form.category || null,
-            storage: form.storage,
+            storage: selectedStorage?.category ?? null,
+            storage_location_id: form.storageId || null,
             opened: form.opened,
           },
         }),
@@ -78,6 +81,13 @@ export function PantryItemEditor({ item }: PantryItemEditorProps) {
   const unitId = useId();
   const categoryId = useId();
   const storageId = useId();
+  const selectedStorage = useMemo(() => storages.find((storage) => storage.id === form.storageId) ?? null, [form.storageId, storages]);
+  const groupedStorages = useMemo(() => {
+    return STORAGE_CATEGORY_METADATA.map((category) => ({
+      ...category,
+      locations: storages.filter((storage) => storage.category === category.key),
+    }));
+  }, [storages]);
 
   const handleDelete = async () => {
     const confirmed = window.confirm("Remove this item from your pantry?");
@@ -140,16 +150,22 @@ export function PantryItemEditor({ item }: PantryItemEditorProps) {
         <Label htmlFor={storageId}>Storage</Label>
         <select
           id={storageId}
-          value={form.storage}
-          onChange={(event) => updateField("storage", event.target.value)}
+          value={form.storageId}
+          onChange={(event) => updateField("storageId", event.target.value)}
           className="rounded-2xl border border-[rgb(var(--border))] bg-transparent px-3 py-2 text-sm"
         >
-          {STORAGE_OPTIONS.map((option) => (
-            <option key={option.value} value={option.value} className="bg-[rgb(var(--background))] text-[rgb(var(--foreground))]">
-              {option.label}
-            </option>
+          <option value="">Unassigned</option>
+          {groupedStorages.map((group) => (
+            <optgroup key={group.key} label={group.label}>
+              {group.locations.map((storage) => (
+                <option key={storage.id} value={storage.id}>
+                  {storage.name}
+                </option>
+              ))}
+            </optgroup>
           ))}
         </select>
+        {!storages.length ? <p className="text-xs text-amber-400">Create storage locations from the pantry page to speed up assignments.</p> : null}
       </div>
 
       <label className="flex items-center gap-2 text-sm">

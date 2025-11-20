@@ -26,9 +26,6 @@ CookSnap is a full-stack pantry ops platform built with Next.js App Router + Sup
       ```env
       NEXT_PUBLIC_SUPABASE_URL=your_project_url
       NEXT_PUBLIC_SUPABASE_ANON_KEY=your_anon_key
-      SUPABASE_URL=your_project_url
-      SUPABASE_ANON_KEY=your_anon_key
-      SPOONACULAR_API_KEY=your_spoonacular_key
       ```
       (Server helpers reuse the same anon key; no service key required for this Alpha.) The Spoonacular key powers live recipe enrichment—omit it if you’re fine using the bundled fallback recipes.
 

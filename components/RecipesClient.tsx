@@ -26,14 +26,25 @@ interface RecipesClientProps {
 
 export function RecipesClient({ items, featured, pantryMatches, useNow, fallbackRecipes, datasetAvailable }: RecipesClientProps) {
   const [query, setQuery] = useState("");
+  const [searchTerm, setSearchTerm] = useState("");
   const [results, setResults] = useState<Recipe[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadingMessageIndex, setLoadingMessageIndex] = useState(0);
 
   useEffect(() => {
-    const controller = new AbortController();
     const trimmed = query.trim();
+    if (!trimmed) {
+      setSearchTerm("");
+      return;
+    }
+    const timeout = window.setTimeout(() => setSearchTerm(trimmed), 250);
+    return () => window.clearTimeout(timeout);
+  }, [query]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const trimmed = searchTerm.trim();
     let isCurrent = true;
 
     if (!trimmed) {
@@ -69,7 +80,7 @@ export function RecipesClient({ items, featured, pantryMatches, useNow, fallback
       isCurrent = false;
       controller.abort();
     };
-  }, [query]);
+  }, [searchTerm]);
 
   useEffect(() => {
     if (!loading) {

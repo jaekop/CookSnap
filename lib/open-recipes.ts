@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import Fuse from "fuse.js";
+import type { FuseIndex, IFuseOptions } from "fuse.js";
 import type { Item, Recipe, RecipeIngredient } from "@/types";
 
 interface EnrichedRecipe extends Recipe {
@@ -10,11 +11,40 @@ interface EnrichedRecipe extends Recipe {
   _nerTokens: string[];
 }
 
-let datasetPromise: Promise<EnrichedRecipe[]> | null = null;
-let fusePromise: Promise<Fuse<EnrichedRecipe>> | null = null;
-
 const DATASET_CSV_PATH = path.join(process.cwd(), "data/open-recipes/full_dataset.csv");
 const DATASET_JSON_PATH = path.join(process.cwd(), "data/open-recipes/dataset.json");
+const FUSE_INDEX_PATH = path.join(process.cwd(), "data/open-recipes/fuse-index.json");
+
+type TokenIndex = Map<string, number[]>;
+
+interface DatasetStore {
+  datasetPromise: Promise<EnrichedRecipe[]> | null;
+  fusePromise: Promise<Fuse<EnrichedRecipe> | null> | null;
+  tokenIndexPromise: Promise<TokenIndex> | null;
+  signature: string | null;
+}
+
+const DATASET_STORE_KEY = "__cooksnap_open_recipes__" as const;
+
+function getDatasetStore(): DatasetStore {
+  const globalWithStore = globalThis as typeof globalThis & { [DATASET_STORE_KEY]?: DatasetStore };
+  if (!globalWithStore[DATASET_STORE_KEY]) {
+    globalWithStore[DATASET_STORE_KEY] = {
+      datasetPromise: null,
+      fusePromise: null,
+      tokenIndexPromise: null,
+      signature: null,
+    } satisfies DatasetStore;
+  }
+  return globalWithStore[DATASET_STORE_KEY] as DatasetStore;
+}
+
+const FUSE_OPTIONS: IFuseOptions<EnrichedRecipe> = {
+  includeScore: true,
+  threshold: 0.35,
+  ignoreLocation: true,
+  keys: [{ name: "title", weight: 1 }],
+};
 
 function parseCsvLine(line: string): string[] {
   const result: string[] = [];
@@ -190,36 +220,168 @@ async function readDatasetFromJson(): Promise<EnrichedRecipe[] | null> {
 }
 
 async function loadDataset(): Promise<EnrichedRecipe[]> {
-  if (!datasetPromise) {
-    datasetPromise = (async () => {
-      const fromJson = await readDatasetFromJson();
-      if (fromJson?.length) {
-        return fromJson;
-      }
-      return readDatasetFromCsv();
-    })();
+  const store = getDatasetStore();
+  const { sourceSignature } = getDatasetSource();
+  if (store.datasetPromise && store.signature === sourceSignature) {
+    return store.datasetPromise;
   }
-  return datasetPromise;
+
+  store.signature = sourceSignature ?? null;
+  store.datasetPromise = (async () => {
+    const fromJson = await readDatasetFromJson();
+    if (fromJson?.length) {
+      return fromJson;
+    }
+    return readDatasetFromCsv();
+  })();
+  store.fusePromise = null;
+  store.tokenIndexPromise = null;
+  return store.datasetPromise;
 }
 
 async function loadFuse(): Promise<Fuse<EnrichedRecipe> | null> {
   const dataset = await loadDataset();
   if (!dataset.length) return null;
-  if (!fusePromise) {
-    fusePromise = Promise.resolve(
-      new Fuse(dataset, {
-        includeScore: true,
-        threshold: 0.35,
-        ignoreLocation: true,
-        keys: [{ name: "title", weight: 1 }],
-      })
-    );
+  const store = getDatasetStore();
+  if (!store.fusePromise) {
+    store.fusePromise = (async () => {
+      const index = await loadFuseIndex(dataset);
+      return new Fuse(dataset, FUSE_OPTIONS, index);
+    })();
   }
-  return fusePromise;
+  return store.fusePromise;
 }
 
 function normalizeToken(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function buildPantryTokenSet(items: Item[]): Set<string> {
+  return new Set(items.map((item) => normalizeToken(item.name)).filter(Boolean));
+}
+
+function collectCandidateIndexes(tokens: Set<string>, tokenIndex: TokenIndex): Set<number> {
+  const indexes = new Set<number>();
+  tokens.forEach((token) => {
+    const matches = tokenIndex.get(token);
+    if (!matches) {
+      return;
+    }
+    matches.forEach((idx) => {
+      indexes.add(idx);
+    });
+  });
+  return indexes;
+}
+
+function scoreCandidatesByTokenHits(tokens: Set<string>, tokenIndex: TokenIndex): Map<number, number> {
+  const scores = new Map<number, number>();
+  tokens.forEach((token) => {
+    const matches = tokenIndex.get(token);
+    if (!matches) {
+      return;
+    }
+    matches.forEach((idx) => {
+      scores.set(idx, (scores.get(idx) ?? 0) + 1);
+    });
+  });
+  return scores;
+}
+
+function getDatasetSource(): { sourceSignature: string | null } {
+  if (fs.existsSync(DATASET_JSON_PATH)) {
+    try {
+      const stats = fs.statSync(DATASET_JSON_PATH);
+      return { sourceSignature: `json:${stats.size}:${stats.mtimeMs}` };
+    } catch {
+      // ignore stat errors
+    }
+  }
+  if (fs.existsSync(DATASET_CSV_PATH)) {
+    try {
+      const stats = fs.statSync(DATASET_CSV_PATH);
+      return { sourceSignature: `csv:${stats.size}:${stats.mtimeMs}` };
+    } catch {
+      // ignore stat errors
+    }
+  }
+  return { sourceSignature: null };
+}
+
+async function loadFuseIndex(dataset: EnrichedRecipe[]): Promise<FuseIndex<EnrichedRecipe> | undefined> {
+  const store = getDatasetStore();
+  const signature = store.signature;
+  if (!signature) {
+    return Fuse.createIndex(FUSE_OPTIONS.keys ?? [], dataset);
+  }
+
+  const persisted = await readPersistedFuseIndex(signature);
+  if (persisted) {
+    try {
+      return Fuse.parseIndex(persisted, dataset);
+    } catch {
+      // fall through to rebuilding the index
+    }
+  }
+
+  const freshIndex = Fuse.createIndex(FUSE_OPTIONS.keys ?? [], dataset);
+  await persistFuseIndex(freshIndex, signature);
+  return freshIndex;
+}
+
+async function readPersistedFuseIndex(signature: string): Promise<ReturnType<FuseIndex<EnrichedRecipe>["toJSON"]> | null> {
+  try {
+    const raw = await fs.promises.readFile(FUSE_INDEX_PATH, "utf8");
+    const parsed = JSON.parse(raw) as { signature?: string; index?: ReturnType<FuseIndex<EnrichedRecipe>["toJSON"]> };
+    if (parsed.signature === signature && parsed.index) {
+      return parsed.index;
+    }
+  } catch {
+    // ignore read/parse errors
+  }
+  return null;
+}
+
+async function persistFuseIndex(index: FuseIndex<EnrichedRecipe>, signature: string): Promise<void> {
+  const payload = {
+    signature,
+    index: index.toJSON(),
+  };
+  try {
+    await fs.promises.mkdir(path.dirname(FUSE_INDEX_PATH), { recursive: true });
+    await fs.promises.writeFile(FUSE_INDEX_PATH, JSON.stringify(payload));
+  } catch {
+    // failing to persist should not block search
+  }
+}
+
+async function loadTokenIndex(dataset: EnrichedRecipe[]): Promise<TokenIndex> {
+  const store = getDatasetStore();
+  if (!store.tokenIndexPromise) {
+    store.tokenIndexPromise = (async () => buildTokenIndex(dataset))();
+  }
+  return store.tokenIndexPromise;
+}
+
+function buildTokenIndex(dataset: EnrichedRecipe[]): TokenIndex {
+  const index: TokenIndex = new Map();
+  dataset.forEach((recipe, recipeIndex) => {
+    const tokens = new Set(getRecipeTokens(recipe));
+    tokens.forEach((token) => {
+      if (!token) return;
+      const bucket = index.get(token);
+      if (bucket) {
+        bucket.push(recipeIndex);
+      } else {
+        index.set(token, [recipeIndex]);
+      }
+    });
+  });
+  return index;
+}
+
+function getRecipeTokens(recipe: EnrichedRecipe): string[] {
+  return recipe._nerTokens.length ? recipe._nerTokens : recipe._tokens;
 }
 
 function shuffle<T>(array: T[]): T[] {
@@ -239,41 +401,47 @@ export async function getRandomOpenRecipes(count: number): Promise<Recipe[]> {
     .map(stripInternalFields);
 }
 
-function scoreRecipeForPantry(recipe: EnrichedRecipe, items: Item[]): number {
-  if (!items.length) return 0;
-  const pantrySet = new Set(items.map((item) => normalizeToken(item.name)).filter(Boolean));
-  const tokens = recipe._nerTokens.length ? recipe._nerTokens : recipe._tokens;
+function scoreRecipeForPantry(recipe: EnrichedRecipe, pantrySet: Set<string>): number {
+  if (!pantrySet.size) return 0;
+  const tokens = getRecipeTokens(recipe);
   const matches = tokens.filter((token) => pantrySet.has(token)).length;
   return matches / Math.max(tokens.length, 1);
 }
 
 export async function getBestPantryMatches(items: Item[], limit: number): Promise<Recipe[]> {
   if (!items.length) return [];
+  const pantryTokens = buildPantryTokenSet(items);
+  if (!pantryTokens.size) return [];
   const dataset = await loadDataset();
-  const scored = dataset
-    .map((recipe) => ({ recipe, score: scoreRecipeForPantry(recipe, items) }))
-    .filter((item) => item.score > 0)
-    .sort((a, b) => b.score - a.score)
+  if (!dataset.length) return [];
+  const tokenIndex = await loadTokenIndex(dataset);
+  const candidateIndexes = collectCandidateIndexes(pantryTokens, tokenIndex);
+  if (!candidateIndexes.size) return [];
+
+  return Array.from(candidateIndexes)
+    .map((idx) => ({ recipe: dataset[idx], score: scoreRecipeForPantry(dataset[idx], pantryTokens) }))
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score || (a.recipe.time_min ?? 0) - (b.recipe.time_min ?? 0))
     .slice(0, limit)
     .map((entry) => stripInternalFields(entry.recipe));
-  return scored;
 }
 
 export async function getUseNowRecipes(items: Item[], limit: number): Promise<Recipe[]> {
   const riskyItems = items.filter((item) => ["use-now", "risky"].includes(item.risk_level));
   if (!riskyItems.length) return [];
-  const riskySet = new Set(riskyItems.map((item) => normalizeToken(item.name)).filter(Boolean));
+  const riskyTokens = new Set(riskyItems.map((item) => normalizeToken(item.name)).filter(Boolean));
+  if (!riskyTokens.size) return [];
   const dataset = await loadDataset();
-  const scored = dataset
-    .map((recipe) => ({
-      recipe,
-      score: (recipe._nerTokens.length ? recipe._nerTokens : recipe._tokens).filter((token) => riskySet.has(token)).length,
-    }))
-    .filter((entry) => entry.score > 0)
-    .sort((a, b) => b.score - a.score)
+  if (!dataset.length) return [];
+  const tokenIndex = await loadTokenIndex(dataset);
+  const candidateScores = scoreCandidatesByTokenHits(riskyTokens, tokenIndex);
+  if (!candidateScores.size) return [];
+
+  return Array.from(candidateScores.entries())
+    .map(([idx, score]) => ({ recipe: dataset[idx], score }))
+    .sort((a, b) => b.score - a.score || (a.recipe.time_min ?? 0) - (b.recipe.time_min ?? 0))
     .slice(0, limit)
     .map((entry) => stripInternalFields(entry.recipe));
-  return scored;
 }
 
 export async function searchOpenRecipes(query: string, limit = 10): Promise<Recipe[]> {
