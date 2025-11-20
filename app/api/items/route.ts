@@ -76,7 +76,8 @@ export async function POST(request: Request) {
   const lookups = buildStorageLookups(storageLocations);
 
   const payload = await request.json();
-  const items = Array.isArray(payload.items) ? payload.items : [payload];
+  const rawItems = Array.isArray(payload.items) ? payload.items : [payload];
+  const items = rawItems as Array<Record<string, any>>;
 
   const inserts = items.map((item) => {
     const requestedCategory = normalizeStorageCategory(item.storage);

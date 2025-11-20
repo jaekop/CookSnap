@@ -6,7 +6,18 @@ import type { Item, Recipe } from "@/types";
 import { RecipesClient } from "@/components/RecipesClient";
 import { getRandomOpenRecipes, getBestPantryMatches, getUseNowRecipes } from "@/lib/open-recipes";
 
-async function loadContext() {
+type RecipesContext =
+  | { error: string }
+  | {
+      items: Item[];
+      featured: Recipe[];
+      pantryMatches: Recipe[];
+      useNow: Recipe[];
+      fallbackRecipes: Recipe[];
+      datasetAvailable: boolean;
+    };
+
+async function loadContext(): Promise<RecipesContext> {
   const supabase = await createSupabaseServerClient();
   try {
     const userId = await requireUserId(supabase);
@@ -49,7 +60,7 @@ async function loadContext() {
 export default async function RecipesPage() {
   const context = await loadContext();
 
-  if (context.error) {
+  if ("error" in context) {
     return (
       <div className="flex flex-col items-center gap-4 rounded-3xl border border-[rgb(var(--border))] bg-[rgb(var(--accent))]/20 p-10 text-center">
         <h1 className="text-2xl font-semibold">Use-it-now recipes, once you sign in</h1>

@@ -6,7 +6,10 @@ import { resolveHouseholdId } from "@/lib/households";
 import { ensureDefaultStorageLocations, fetchStorageLocations } from "@/lib/storage-server";
 import type { Item, StorageLocation } from "@/types";
 
-async function loadPantry() {
+type PantryData = { items: Item[]; storages: StorageLocation[] };
+type PantryResult = PantryData | { error: string };
+
+async function loadPantry(): Promise<PantryResult> {
   const supabase = await createSupabaseServerClient();
   try {
     const userId = await requireUserId(supabase);
@@ -35,7 +38,7 @@ async function loadPantry() {
 export default async function PantryPage() {
   const data = await loadPantry();
 
-  if (data.error) {
+  if ("error" in data) {
     return (
       <div className="flex flex-col items-center gap-4 rounded-3xl border border-[rgb(var(--border))] bg-[rgb(var(--accent))]/20 p-10 text-center">
         <h1 className="text-2xl font-semibold">Sign in to view your pantry</h1>
@@ -49,8 +52,7 @@ export default async function PantryPage() {
     );
   }
 
-  const { items } = data;
-  const storages = data.storages ?? ([] as StorageLocation[]);
+  const { items, storages } = data;
 
   return (
     <div className="space-y-6">

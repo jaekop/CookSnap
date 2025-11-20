@@ -49,7 +49,7 @@ export interface Recipe {
 }
 
 export interface ExternalRecipe {
-  id: string;
+  id?: string;
   provider: string;
   external_id: string;
   title: string;

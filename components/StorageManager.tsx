@@ -9,8 +9,8 @@ import { Label } from "@/components/ui/label";
 
 interface StorageManagerProps {
   storages: StorageLocation[];
-  onCreate: (payload: { name: string; category: StorageCategory }) => Promise<void>;
-  onRename: (id: string, name: string) => Promise<void>;
+  onCreate: (payload: { name: string; category: StorageCategory }) => Promise<StorageLocation>;
+  onRename: (id: string, name: string) => Promise<StorageLocation>;
 }
 
 export function StorageManager({ storages, onCreate, onRename }: StorageManagerProps) {
@@ -62,7 +62,6 @@ export function StorageManager({ storages, onCreate, onRename }: StorageManagerP
     setEditError(null);
     try {
       await onRename(storageId, editingName.trim());
-      setEditingId(null);
       setEditingName("");
     } catch (error) {
       setEditError(error instanceof Error ? error.message : "Unable to rename storage");

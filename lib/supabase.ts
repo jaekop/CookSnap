@@ -1,13 +1,14 @@
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { cookies, type RequestCookies } from "next/headers";
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey =
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_SERVICE_KEY;
 
-export type Database = Record<string, never>;
+// Use a permissive Database type until a generated Supabase type is added
+export type Database = any;
 
 function requireEnv(variable: string | undefined, name: string): string {
   if (!variable) {
@@ -16,7 +17,7 @@ function requireEnv(variable: string | undefined, name: string): string {
   return variable;
 }
 
-const buildCookieAdapter = (store: RequestCookies) => ({
+const buildCookieAdapter = (store: ReturnType<typeof cookies>) => ({
   get(name: string) {
     return store.get(name)?.value;
   },

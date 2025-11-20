@@ -75,7 +75,7 @@ export function RecipeCard({ recipe, pantryItems }: RecipeCardProps) {
         ) : null}
         <Button
           type="button"
-          variant="secondary"
+          variant="default"
           className="mt-2 w-full text-xs"
           onClick={handleAddIngredients}
           disabled={!missingIngredients.length || added}

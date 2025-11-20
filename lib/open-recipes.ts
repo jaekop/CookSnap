@@ -312,7 +312,7 @@ async function loadFuseIndex(dataset: EnrichedRecipe[]): Promise<FuseIndex<Enric
   const store = getDatasetStore();
   const signature = store.signature;
   if (!signature) {
-    return Fuse.createIndex(FUSE_OPTIONS.keys ?? [], dataset);
+    return Fuse.createIndex<EnrichedRecipe>(FUSE_OPTIONS.keys ?? [], dataset);
   }
 
   const persisted = await readPersistedFuseIndex(signature);
@@ -324,7 +324,7 @@ async function loadFuseIndex(dataset: EnrichedRecipe[]): Promise<FuseIndex<Enric
     }
   }
 
-  const freshIndex = Fuse.createIndex(FUSE_OPTIONS.keys ?? [], dataset);
+  const freshIndex = Fuse.createIndex<EnrichedRecipe>(FUSE_OPTIONS.keys ?? [], dataset);
   await persistFuseIndex(freshIndex, signature);
   return freshIndex;
 }

@@ -10,7 +10,16 @@ import { riskFor } from "@/lib/risk";
 import { getStorageCategoryLabel, normalizeStorageCategory } from "@/lib/storage";
 import type { Item, Recipe } from "@/types";
 
-async function getDashboard() {
+type DashboardData = {
+  items: Item[];
+  events: Array<{ id: string; type: string; payload: unknown; created_at: string }>;
+  recommended: Recipe[];
+  summary: { totalItems: number; risky: number; lastEvent: string | null };
+};
+
+type DashboardResult = DashboardData | { error: string };
+
+async function getDashboard(): Promise<DashboardResult> {
   const supabase = await createSupabaseServerClient();
 
   try {
@@ -91,7 +100,7 @@ function ActivityList({ events }: { events: Array<{ id: string; type: string; pa
 export default async function HomePage() {
   const data = await getDashboard();
 
-  if (data.error) {
+  if ("error" in data) {
     return <SignInCTA />;
   }
 
